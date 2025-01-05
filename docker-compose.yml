@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # PostgreSQL container
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Telegram bot container
+  telegram-bot:
+    build: ./bot  # Path to the bot folder where the Dockerfile is located
+    env_file:  # Explicitly load the .env file
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
+      NEUROCHAIN_API_KEY: ${NEUROCHAIN_API_KEY}
+      TELEGRAM_API_KEY: ${TELEGRAM_API_KEY}
+      PYTHONUNBUFFERED: 1  # Add this line for unbuffered logging
+    depends_on:
+      - postgres  # Ensure PostgreSQL starts before the bot
+    volumes:
+      - ./bot:/app  # Mount the bot folder to the container
+    restart: always
+
+     # Streamlit dashboard container
+  dashboard:
+    image: python:3.10-slim  # Use a lightweight Python image
+    volumes:
+      - .:/app  # Mount the project folder to the container
+    working_dir: /app  # Set the working directory inside the container
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: >
+      sh -c "pip install streamlit pandas psycopg2-binary asyncpg plotly &&
+             streamlit run dashboard.py --server.port=8501 --server.enableCORS=false"
+    ports:
+      - "8501:8501"  # Expose the dashboard on port 8501
+    depends_on:
+      - postgres  # Ensure PostgreSQL starts before the dashboard
+    env_file:
+      - .env  # Load shared environment variables
+
+
+
+volumes:
+  postgres_data:
+    driver: local
