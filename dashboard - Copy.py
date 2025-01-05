@@ -33,14 +33,13 @@ def clean_sentiments(df):
 
 # Streamlit UI
 st.set_page_config(page_title="Community Sentiment Dashboard", layout="wide")
-st.title("🌟 Community Sentiment Dashboard")
-st.markdown("---")
+st.title("🚀 Community Sentiment Dashboard")
+st.sidebar.header("Dashboard Options")
 
 # Sidebar filters
-st.sidebar.header("📊 Dashboard Filters")
 date_range = st.sidebar.date_input("Filter by Date Range", [])
 sentiment_filter = st.sidebar.multiselect("Filter by Sentiment", options=["Positive", "Neutral", "Negative"])
-show_stacked_chart = st.sidebar.checkbox("Show Sentiment Stacked Chart", value=True)
+emotion_filter = st.sidebar.multiselect("Filter by Emotion", options=["Happy", "Sad", "Angry", "Frustrated"])
 
 # Fetch and process data
 st.text("Fetching data from the database...")
@@ -56,6 +55,8 @@ if not data.empty:
 
     if sentiment_filter:
         data = data[data["sentiment"].isin(sentiment_filter)]
+    if emotion_filter:
+        data = data[data["emotion"].isin(emotion_filter)]
 
     if data.empty:
         st.warning("No data available for the selected filters.")
@@ -64,69 +65,66 @@ if not data.empty:
         st.subheader("📌 Key Insights")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("💬 Total Messages", len(data))
+            st.metric("Total Messages", len(data))
         with col2:
-            st.metric("👥 Unique Users", data["user_name"].nunique())
+            st.metric("Unique Users", data["user_name"].nunique())
         with col3:
-            st.metric("🔝 Top Sentiment", data["sentiment"].mode().iloc[0])
+            st.metric("Top Sentiment", data["sentiment"].mode().iloc[0])
         with col4:
-            st.metric("🌟 Current Vibe", data.iloc[0]["sentiment"])
+            st.metric("Top Emotion", data["emotion"].mode().iloc[0])
 
-        st.markdown("---")
+        # Tabs for visualization
+        tab1, tab2, tab3 = st.tabs(["📈 Trends", "🎭 Emotions", "👥 Users"])
 
-        # Sentiment Trends (Stacked Chart)
-        if show_stacked_chart:
-            st.subheader("📈 Sentiment Trends (Stacked Chart)")
+        # Sentiment Trends
+        with tab1:
+            st.subheader("Sentiment Trends Over Time")
             sentiment_trends = (
                 data.groupby([data["created_at"].dt.date, "sentiment"])
                 .size()
                 .reset_index(name="count")
             )
-            fig = px.bar(
+            fig = px.line(
                 sentiment_trends,
                 x="created_at",
                 y="count",
                 color="sentiment",
-                title="Sentiment Distribution Over Time",
-                labels={"created_at": "Date", "count": "Messages"},
-                text="count",
-                color_discrete_map={"Positive": "#4CAF50", "Negative": "#F44336", "Neutral": "#2196F3"},
+                title="Sentiment Trends",
+                labels={"created_at": "Date", "count": "Count"},
+                color_discrete_map={"Positive": "green", "Negative": "red", "Neutral": "blue"},
             )
-            fig.update_layout(
-                barmode="stack",
-                xaxis=dict(tickformat="%b %d", tickangle=45),
-                plot_bgcolor="rgba(0, 0, 0, 0)",
-                paper_bgcolor="rgba(0, 0, 0, 0)"
-            )
+            fig.update_layout(xaxis=dict(tickformat="%b %d", tickangle=45))
             st.plotly_chart(fig, use_container_width=True)
 
         # Emotion Distribution
-        st.subheader("🎭 Emotion Distribution")
-        emotion_counts = data["emotion"].value_counts().reset_index()
-        emotion_counts.columns = ["emotion", "count"]
-        fig = px.pie(
-            emotion_counts,
-            names="emotion",
-            values="count",
-            title="Emotion Distribution",
-            color_discrete_sequence=px.colors.qualitative.Pastel,
-        )
-        st.plotly_chart(fig)
+        with tab2:
+            st.subheader("Emotion Distribution")
+            emotion_counts = data["emotion"].value_counts().reset_index()
+            emotion_counts.columns = ["emotion", "count"]
+            fig = px.pie(
+                emotion_counts,
+                names="emotion",
+                values="count",
+                title="Emotion Distribution",
+                color_discrete_sequence=px.colors.qualitative.Set2,
+            )
+            st.plotly_chart(fig)
 
         # Top User Contributions
-        st.subheader("👤 Top Users by Contributions")
-        user_counts = data["user_name"].value_counts().reset_index()
-        user_counts.columns = ["user_name", "count"]
-        fig = px.bar(
-            user_counts.head(10),
-            x="user_name",
-            y="count",
-            title="Top Users by Message Count",
-            labels={"user_name": "User", "count": "Messages"},
-            color="count",
-            color_continuous_scale="Blues",
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        with tab3:
+            st.subheader("Top Users by Contributions")
+            user_counts = data["user_name"].value_counts().reset_index()
+            user_counts.columns = ["user_name", "count"]
+            fig = px.bar(
+                user_counts.head(10),
+                x="user_name",
+                y="count",
+                title="Top Users by Message Count",
+                labels={"user_name": "User", "count": "Messages"},
+                color="count",
+                color_continuous_scale="Plasma",
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
         # Data Table
         st.subheader("📋 Detailed Data Table")

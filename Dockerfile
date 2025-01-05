@@ -5,15 +5,10 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Copy the application files
-COPY . /app
+COPY . .
 
 # Install dependencies
-RUN pip install --no-cache-dir \
-    streamlit \
-    pandas \
-    psycopg2-binary \
-    asyncpg \
-    plotly
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Command to run the Streamlit app
 CMD ["streamlit", "run", "dashboard.py", "--server.port=8501", "--server.enableCORS=false"]

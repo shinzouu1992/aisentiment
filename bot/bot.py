@@ -40,15 +40,24 @@ async def ensure_schema(conn):
                 justification TEXT,
                 emotion TEXT,
                 urgency TEXT,
+                is_reply BOOLEAN DEFAULT FALSE,
+                replied_to_user TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
-        # Ensure the `created_at` column exists
-        await conn.execute('''
-            ALTER TABLE sentiment_analysis
-            ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
-        ''')
+        # Ensure all required columns exist
+        columns = {
+            "is_reply": "BOOLEAN DEFAULT FALSE",
+            "replied_to_user": "TEXT",
+            "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        }
+
+        for column, definition in columns.items():
+            await conn.execute(f'''
+                ALTER TABLE sentiment_analysis
+                ADD COLUMN IF NOT EXISTS {column} {definition};
+            ''')
 
         logger.info("Database schema ensured.")
     except Exception as e:
@@ -56,9 +65,8 @@ async def ensure_schema(conn):
         raise
 
 
-
-async def store_in_db(message_id, user_name, message_text, sentiment, justification, emotion, urgency):
-    """Store message, sentiment, justification, emotion, and urgency in the database."""
+async def store_in_db(message_id, user_name, message_text, sentiment, justification, emotion, urgency, is_reply=False, replied_to_user=None):
+    """Store message, sentiment, justification, emotion, urgency, and reply details in the database."""
     try:
         conn = await asyncpg.connect(DATABASE_URL)
 
@@ -68,11 +76,11 @@ async def store_in_db(message_id, user_name, message_text, sentiment, justificat
         # Insert the data into the table
         result = await conn.execute('''
             INSERT INTO sentiment_analysis(
-                message_id, user_name, message, sentiment, justification, emotion, urgency
+                message_id, user_name, message, sentiment, justification, emotion, urgency, is_reply, replied_to_user
             )
-            VALUES($1, $2, $3, $4, $5, $6, $7)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (message_id) DO NOTHING
-        ''', message_id, user_name, message_text, sentiment, justification, emotion, urgency)
+        ''', message_id, user_name, message_text, sentiment, justification, emotion, urgency, is_reply, replied_to_user)
 
         if result == "INSERT 0 0":
             logger.warning(f"[MessageID: {message_id}] Duplicate message. Skipping database insert.")
@@ -86,59 +94,67 @@ async def store_in_db(message_id, user_name, message_text, sentiment, justificat
 
 async def handle_message(update, context):
     """Handle incoming messages from the Telegram bot."""
-    message_id = str(update.message.message_id)
-    user_name = update.message.from_user.first_name
-    message_text = update.message.text
-
-    # Skip if the message has already been processed
-    if message_id in processed_messages:
-        logger.warning(f"[MessageID: {message_id}] Message already processed. Skipping.")
+    if not update.message:  # Skip updates without messages
+        logger.warning("Received an update without a message. Skipping.")
         return
 
-    # Mark the message as being processed
-    processed_messages.add(message_id)
+    try:
+        message_id = str(update.message.message_id)
+        user_name = update.message.from_user.first_name
+        message_text = update.message.text
 
-    logger.info(f"Message from {user_name}: {message_text} (MessageID: {message_id})")
+        # Check if the message is a reply
+        is_reply = update.message.reply_to_message is not None
+        replied_to_user = None
+        if is_reply:
+            replied_to_user = update.message.reply_to_message.from_user.first_name
+            logger.info(f"[MessageID: {message_id}] Reply to {replied_to_user} detected.")
 
-    url = 'https://ncmb.neurochain.io/tasks/message'
-    data = {
-        "model": "Mistral-7B-Instruct-v0.2-GPTQ",
-        "prompt": f'[INST] You are sentiment analytic. respond in format '
-                  f'SENTIMENT: sentiment, JUSTIFICATION: basis on which the sentiment was derived, '
-                  f'EMOTIONS: emotions, URGENCY: level of urgency [/INST] Analyze this message: {message_text}',
-        "max_tokens": 1024,
-        "temperature": 0.6,
-        "top_p": 0.95,
-        "frequency_penalty": 0,
-        "presence_penalty": 1.1,
-    }
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {NEUROCHAIN_API_KEY}',
-    }
+        # Skip if the message has already been processed
+        if message_id in processed_messages:
+            logger.warning(f"[MessageID: {message_id}] Message already processed. Skipping.")
+            return
 
-    # Retry logic for API call
-    for attempt in range(3):  # Retry up to 3 times
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=data, headers=headers, timeout=30)
+        # Mark the message as being processed
+        processed_messages.add(message_id)
 
-            if response.status_code in [200, 201]:
-                parsed_response = response.json()
-                if 'choices' in parsed_response and isinstance(parsed_response['choices'], list) and len(parsed_response['choices']) > 0:
-                    text = parsed_response['choices'][0].get('text', '')
+        logger.info(f"Message from {user_name}: {message_text} (MessageID: {message_id})")
 
-                    # Validate text content
-                    if not text:
-                        logger.error(f"[MessageID: {message_id}] API response 'text' field is empty or missing.")
-                        return
+        url = 'https://ncmb.neurochain.io/tasks/message'
+        data = {
+            "model": "Mistral-7B-Instruct-v0.2-GPTQ",
+            "prompt": f'[INST] You are sentiment analytic. respond in format '
+                      f'SENTIMENT: sentiment, JUSTIFICATION: basis on which the sentiment was derived, '
+                      f'EMOTIONS: emotions, URGENCY: level of urgency [/INST] Analyze this message: {message_text}',
+            "max_tokens": 1024,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "frequency_penalty": 0,
+            "presence_penalty": 1.1,
+        }
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {NEUROCHAIN_API_KEY}',
+        }
 
-                    # Improved Parsing Logic
-                    try:
-                        sentiment = None
-                        justification = None
-                        emotion = None
-                        urgency = None
+        # Retry logic for API call
+        for attempt in range(3):  # Retry up to 3 times
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=data, headers=headers, timeout=30)
+
+                if response.status_code in [200, 201]:
+                    parsed_response = response.json()
+                    if 'choices' in parsed_response and isinstance(parsed_response['choices'], list) and len(parsed_response['choices']) > 0:
+                        text = parsed_response['choices'][0].get('text', '')
+
+                        # Validate text content
+                        if not text:
+                            logger.error(f"[MessageID: {message_id}] API response 'text' field is empty or missing.")
+                            return
+
+                        # Improved Parsing Logic
+                        sentiment, justification, emotion, urgency = None, None, None, None
 
                         lines = text.splitlines()
                         for line in lines:
@@ -151,7 +167,7 @@ async def handle_message(update, context):
                             elif line.startswith("URGENCY:"):
                                 urgency = line.split("URGENCY:")[1].strip()
 
-                        if not (sentiment and justification and emotion and urgency):
+                        if not all([sentiment, justification, emotion, urgency]):
                             raise ValueError("Some fields are missing in the parsed response.")
 
                         logger.info(f"[MessageID: {message_id}] SENTIMENT: {sentiment}")
@@ -160,23 +176,24 @@ async def handle_message(update, context):
                         logger.info(f"[MessageID: {message_id}] URGENCY: {urgency}")
 
                         # Store in the database
-                        await store_in_db(message_id, user_name, message_text, sentiment, justification, emotion, urgency)
+                        await store_in_db(
+                            message_id, user_name, message_text, sentiment, justification, emotion, urgency, is_reply, replied_to_user
+                        )
 
-                    except Exception as e:
-                        logger.error(f"[MessageID: {message_id}] Error parsing text: {e}")
-                        logger.error(f"[MessageID: {message_id}] Received text: {text}")
-                        return
+                    else:
+                        logger.error(f"[MessageID: {message_id}] Unexpected API response format or missing 'choices'.")
                 else:
-                    logger.error(f"[MessageID: {message_id}] Unexpected API response format or missing 'choices'.")
-            else:
-                logger.error(f"[MessageID: {message_id}] API call failed with status {response.status_code}: {response.text}")
-            break  # Exit loop if successful or unrecoverable error occurs
-        except httpx.RequestError as e:
-            logger.error(f"[MessageID: {message_id}] API request failed on attempt {attempt + 1}: {e}")
-            await asyncio.sleep(2 ** attempt)  # Exponential backoff
-        except Exception as e:
-            logger.error(f"[MessageID: {message_id}] Unexpected error: {e}")
-            break
+                    logger.error(f"[MessageID: {message_id}] API call failed with status {response.status_code}: {response.text}")
+                break  # Exit loop if successful or unrecoverable error occurs
+            except httpx.RequestError as e:
+                logger.error(f"[MessageID: {message_id}] API request failed on attempt {attempt + 1}: {e}")
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            except Exception as e:
+                logger.error(f"[MessageID: {message_id}] Unexpected error: {e}")
+                break
+
+    except Exception as e:
+        logger.error(f"Unexpected error in handle_message: {e}")
 
 
 def main():
